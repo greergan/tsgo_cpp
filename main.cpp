@@ -1,19 +1,23 @@
 #include <iostream>
-#include <cstdlib> // Required for free()
+#include <memory>
+#include <string_view>
+#include <cstdlib>
 #include "libtsgo.h"
 
+struct GoStr {
+    char* p;
+    GoStr(char* p) : p(p) {}
+    ~GoStr() { free(p); }
+    std::string_view view() const { return p; }
+};
+
 int main() {
-    std::string my_ts_code = "console.log('Hello'); export {};";
+    std::string my_ts_code = "import console from 'console'; console.log('Hello');";
 
-    // Pass using const_cast
-    char* js_result = TranspileAndCheckTS(const_cast<char*>(my_ts_code.c_str()));
+    GoStr result(transpile(const_cast<char*>("test.ts"), const_cast<char*>(my_ts_code.c_str()), nullptr));
+    //GoStr result(transpile(const_cast<char*>("dir1/dir2/dir3/test.ts"), const_cast<char*>(my_ts_code.c_str()), const_cast<char*>("dist")));
 
-    if (js_result != nullptr) {
-        std::cout << "Transpiled JS: " << js_result << std::endl;
-
-        // Free the memory allocated by Go
-        free(js_result);
-    }
+    std::cout << result.view() << std::endl;
 
     return 0;
 }

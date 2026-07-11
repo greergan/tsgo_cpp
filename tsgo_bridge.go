@@ -7,10 +7,12 @@ import "C"
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/microsoft/typescript-go/internal/ast"
+	"github.com/microsoft/typescript-go/internal/bundled"
 	"github.com/microsoft/typescript-go/internal/compiler"
 	"github.com/microsoft/typescript-go/internal/core"
 	"github.com/microsoft/typescript-go/internal/diagnostics"
@@ -45,7 +47,7 @@ func (h *fullHost) GetDefaultLibFileName(options any) string    { return "lib.d.
 func (h *fullHost) GetNewLine() string                          { return "\n" }
 func (h *fullHost) UseCaseSensitiveFileNames() bool             { return false }
 func (h *fullHost) Trace(msg *diagnostics.Message, args ...any) {}
-func (h *fullHost) DefaultLibraryPath() string                  { return "/" }
+func (h *fullHost) DefaultLibraryPath() string                  { return bundled.LibPath() }
 func (h *fullHost) GetResolvedProjectReference(fileName string, path tspath.Path) *tsoptions.ParsedCommandLine {
 	return nil
 }
@@ -69,25 +71,53 @@ func (p *parseHost) ReadDirectory(root string, extensions []string, excludes []s
 	return []string{}
 }
 
-//export TranspileAndCheckTS
-func TranspileAndCheckTS(cCode *C.char) *C.char {
+const tsconfigJSON = `{
+	"compilerOptions": {
+		"target": "es2024",
+		"module": "es2022",
+		"types": [],
+		"allowJs": true,
+		"checkJs": true,
+		"removeComments": true,
+		"forceConsistentCasingInFileNames": true,
+		"strict": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"noFallthroughCasesInSwitch": true,
+		"noImplicitOverride": true,
+		"skipDefaultLibCheck": true
+	}
+}`
+
+//export transpile
+func transpile(cFileName *C.char, cCode *C.char, cOutDir *C.char) *C.char {
+	fileName := "/" + C.GoString(cFileName)
 	tsCode := C.GoString(cCode)
+
 	wrapper := &fsWrapper{files: make(map[string]string)}
-	libContent, _ := os.ReadFile("internal/bundled/libs/lib.d.ts")
-	wrapper.files["lib.d.ts"] = string(libContent)
-	wrapper.files["embedded.ts"] = tsCode
+	wrapper.files[fileName] = tsCode
 
-	host := &fullHost{fs: wrapper}
+	embeddedFS := bundled.WrapFS(wrapper)
 
-	// We rely on ParseCommandLine to return the configuration.
-	// If 'Options' is inaccessible, the library likely expects us to pass
-	// command line args via the slice passed to ParseCommandLine.
-	config := tsoptions.ParseCommandLine([]string{
-		"embedded.ts",
-		"--module", "esnext",
-		"--target", "esnext",
-		"--moduleDetection", "force",
-	}, &parseHost{fs: wrapper})
+	host := &fullHost{fs: embeddedFS}
+	ph := &parseHost{fs: embeddedFS}
+
+	json, diags := tsoptions.ParseConfigFileTextToJson("/tsconfig.json", "/tsconfig.json", tsconfigJSON)
+	if len(diags) > 0 {
+		return C.CString("Error: Failed to parse tsconfig")
+	}
+
+	config := tsoptions.ParseJsonConfigFileContent(
+		json,
+		ph,
+		"/",
+		nil,
+		"/tsconfig.json",
+		nil,
+		nil,
+		nil,
+	)
+	config.ParsedConfig.FileNames = append(config.ParsedConfig.FileNames, fileName)
 
 	prog := compiler.NewProgram(compiler.ProgramOptions{
 		Host:   host,
@@ -97,21 +127,47 @@ func TranspileAndCheckTS(cCode *C.char) *C.char {
 	if prog == nil {
 		return C.CString("Error: Failed to init program")
 	}
-	prog.GetSourceFile("embedded.ts")
 
-	var sb strings.Builder
+	outDir := ""
+	if cOutDir != nil {
+		outDir = C.GoString(cOutDir)
+	}
+
+	if outDir == "" {
+		var sb strings.Builder
+		prog.Emit(context.Background(), compiler.EmitOptions{
+			WriteFile: func(fileName string, text string, data *compiler.WriteFileData) error {
+				sb.WriteString(text)
+				return nil
+			},
+		})
+		res := sb.String()
+		if res == "" {
+			return C.CString("Error: No code emitted")
+		}
+		return C.CString(res)
+	}
+
+	var emitErr error
 	prog.Emit(context.Background(), compiler.EmitOptions{
-		WriteFile: func(fileName string, text string, data *compiler.WriteFileData) error {
-			sb.WriteString(text)
+		WriteFile: func(outFileName string, text string, data *compiler.WriteFileData) error {
+			dest := filepath.Join(outDir, outFileName)
+			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+				emitErr = err
+				return err
+			}
+			if err := os.WriteFile(dest, []byte(text), 0o644); err != nil {
+				emitErr = err
+				return err
+			}
 			return nil
 		},
 	})
 
-	res := sb.String()
-	if res == "" {
-		return C.CString("Error: No code emitted")
+	if emitErr != nil {
+		return C.CString("Error: " + emitErr.Error())
 	}
-	return C.CString(res)
+	return C.CString("")
 }
 
 func main() {}
