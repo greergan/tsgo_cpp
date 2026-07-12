@@ -135,9 +135,10 @@ const tsconfigJSON = `{
 	"compilerOptions": {
 		"target": "ESNext",
 		"module": "ESNext",
+		"moduleResolution": "bundler",
 		"allowJs": true,
 		"checkJs": true,
-		"removeComments": true,
+		"removeComments": false,
 		"forceConsistentCasingInFileNames": true,
 		"strict": true,
 		"noUnusedLocals": true,
