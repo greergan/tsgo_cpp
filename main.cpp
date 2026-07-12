@@ -17,7 +17,13 @@ int main() {
         "const v2: Vector3 = { x: 4, y: 5, z: 6 };\n"
         "const v3 = add(v1, v2);\n"
         "const v4 = scale(v1, 2);\n"
-        "console.log(dot(v3, v4));\n";
+        "console.log(dot(v3, v4));\n"
+        "const v5: Vector3 = { x: 1, y: 2, z: 3 };\n"
+        "const v6: Vector3 = { x: 4, y: 5, z: 6 };\n"
+        "const v7 = add(v5, v6);\n"
+        "const v8 = scale(v5, 2);\n"
+        "console.log(dot(v7, v8));\n";
+
 
     //std::string my_ts_code = "import console from 'console'; console.log('Hello');";
     //GoStr result1(transpile(const_cast<char*>("test.ts"), const_cast<char*>(my_ts_code.c_str()), nullptr, nullptr));

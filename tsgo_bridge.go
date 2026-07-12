@@ -25,18 +25,18 @@ import (
 	"github.com/microsoft/typescript-go/internal/vfs"
 )
 
-//go:embed types
-var typesFS embed.FS
+//go:embed lib
+var libFS embed.FS
 
 var bundledTypes map[string]string
 
 func init() {
 	bundledTypes = make(map[string]string)
-	fs.WalkDir(typesFS, "types", func(path string, d fs.DirEntry, err error) error {
+	fs.WalkDir(libFS, "lib", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		data, err := typesFS.ReadFile(path)
+		data, err := libFS.ReadFile(path)
 		if err != nil {
 			return err
 		}
@@ -124,10 +124,24 @@ func transpile(cFileName *C.char, cCode *C.char, cDtsCode *C.char, cOutDir *C.ch
 	wrapper.files[fileName] = tsCode
 	wrapper.files["/console.d.ts"] = consoleDTS
 
-	// inject bundled types/*.d.ts into virtual FS
+	// inject bundled lib/*.d.ts into virtual FS
 	for path, content := range bundledTypes {
 		wrapper.files[path] = content
 	}
+
+	// inject runtime types/ directory into virtual FS
+	filepath.WalkDir("types", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		vPath := "/" + path
+		wrapper.files[vPath] = string(data)
+		return nil
+	})
 
 	// inject dts into virtual FS if provided
 	if cDtsCode != nil {
@@ -156,10 +170,19 @@ func transpile(cFileName *C.char, cCode *C.char, cDtsCode *C.char, cOutDir *C.ch
 	)
 	config.ParsedConfig.FileNames = append(config.ParsedConfig.FileNames, fileName)
 
-	// add bundled types to file list
+	// add bundled lib types to file list
 	for path := range bundledTypes {
 		config.ParsedConfig.FileNames = append(config.ParsedConfig.FileNames, path)
 	}
+
+	// add runtime types to file list
+	filepath.WalkDir("types", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		config.ParsedConfig.FileNames = append(config.ParsedConfig.FileNames, "/"+path)
+		return nil
+	})
 
 	// add dts to file list if provided
 	if cDtsCode != nil {

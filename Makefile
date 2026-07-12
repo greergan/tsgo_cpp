@@ -2,6 +2,7 @@ all: slim_tsc_stub
 
 libtsgo.a:
 	cp -r ../typescript-bridge/types types
+	cp -r ../typescript-bridge/lib lib
 	go build -buildmode=c-archive -o libtsgo.a tsgo_bridge.go
 
 slim_tsc_stub: clean libtsgo.a
@@ -9,5 +10,5 @@ slim_tsc_stub: clean libtsgo.a
 	./slim_tsc_stub
 
 clean:
-	rm -rf libtsgo.a libtsgo.h slim_tsc_stub dist types
+	rm -rf libtsgo.a libtsgo.h slim_tsc_stub dist types lib
 	clear
