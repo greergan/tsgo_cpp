@@ -1,0 +1,6 @@
+control
+dist
+*.h
+*.a
+slim_tsc_stub
+go.sum
