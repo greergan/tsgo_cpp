@@ -48,18 +48,55 @@ func init() {
 // --- FS and Host implementations (Keep as before) ---
 type fsWrapper struct{ files map[string]string }
 
-func (w *fsWrapper) UseCaseSensitiveFileNames() bool               { return false }
-func (w *fsWrapper) FileExists(path string) bool                   { _, ok := w.files[path]; return ok }
-func (w *fsWrapper) ReadFile(path string) (string, bool)           { s, ok := w.files[path]; return s, ok }
+func (w *fsWrapper) UseCaseSensitiveFileNames() bool { return false }
+func (w *fsWrapper) FileExists(path string) bool     { _, ok := w.files[path]; return ok }
+func (w *fsWrapper) ReadFile(path string) (string, bool) {
+	s, ok := w.files[path]
+	return s, ok
+}
 func (w *fsWrapper) WriteFile(path string, data string) error      { w.files[path] = data; return nil }
 func (w *fsWrapper) AppendFile(path string, data string) error     { w.files[path] += data; return nil }
 func (w *fsWrapper) Remove(path string) error                      { delete(w.files, path); return nil }
 func (w *fsWrapper) Chtimes(path string, a, m time.Time) error     { return nil }
-func (w *fsWrapper) DirectoryExists(path string) bool              { return false }
-func (w *fsWrapper) GetAccessibleEntries(path string) vfs.Entries  { return vfs.Entries{} }
 func (w *fsWrapper) Stat(path string) vfs.FileInfo                 { return nil }
 func (w *fsWrapper) WalkDir(root string, fn vfs.WalkDirFunc) error { return nil }
 func (w *fsWrapper) Realpath(path string) string                   { return path }
+
+func (w *fsWrapper) DirectoryExists(path string) bool {
+	prefix := strings.TrimRight(path, "/") + "/"
+	for k := range w.files {
+		if strings.HasPrefix(k, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *fsWrapper) GetAccessibleEntries(path string) vfs.Entries {
+	prefix := strings.TrimRight(path, "/") + "/"
+	seen := make(map[string]bool)
+	var entries vfs.Entries
+	for k := range w.files {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		rest := k[len(prefix):]
+		parts := strings.SplitN(rest, "/", 2)
+		name := parts[0]
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		if len(parts) == 2 {
+			// it's a directory entry
+			entries.Directories = append(entries.Directories, name)
+		} else {
+			// it's a file entry
+			entries.Files = append(entries.Files, name)
+		}
+	}
+	return entries
+}
 
 type fullHost struct{ fs vfs.FS }
 
@@ -111,18 +148,8 @@ const tsconfigJSON = `{
 	}
 }`
 
-const consoleDTS = `declare const console: Console;
-export default console;
-`
-
-//export transpile
-func transpile(cFileName *C.char, cCode *C.char, cDtsCode *C.char, cOutDir *C.char) *C.char {
-	fileName := "/" + C.GoString(cFileName)
-	tsCode := C.GoString(cCode)
-
+func makeWrapper() *fsWrapper {
 	wrapper := &fsWrapper{files: make(map[string]string)}
-	wrapper.files[fileName] = tsCode
-	wrapper.files["/console.d.ts"] = consoleDTS
 
 	// inject bundled lib/*.d.ts into virtual FS
 	for path, content := range bundledTypes {
@@ -138,10 +165,36 @@ func transpile(cFileName *C.char, cCode *C.char, cDtsCode *C.char, cOutDir *C.ch
 		if err != nil {
 			return err
 		}
-		vPath := "/" + path
-		wrapper.files[vPath] = string(data)
+		wrapper.files["/"+path] = string(data)
 		return nil
 	})
+
+	return wrapper
+}
+
+func makeConfig(ph *parseHost, fileNames []string) *tsoptions.ParsedCommandLine {
+	json, _ := tsoptions.ParseConfigFileTextToJson("/tsconfig.json", "/tsconfig.json", tsconfigJSON)
+	config := tsoptions.ParseJsonConfigFileContent(
+		json,
+		ph,
+		"/",
+		nil,
+		"/tsconfig.json",
+		nil,
+		nil,
+		nil,
+	)
+	config.ParsedConfig.FileNames = append(config.ParsedConfig.FileNames, fileNames...)
+	return config
+}
+
+//export transpile
+func transpile(cFileName *C.char, cCode *C.char, cDtsCode *C.char, cOutDir *C.char) *C.char {
+	fileName := "/" + C.GoString(cFileName)
+	tsCode := C.GoString(cCode)
+
+	wrapper := makeWrapper()
+	wrapper.files[fileName] = tsCode
 
 	// inject dts into virtual FS if provided
 	if cDtsCode != nil {
@@ -149,9 +202,29 @@ func transpile(cFileName *C.char, cCode *C.char, cDtsCode *C.char, cOutDir *C.ch
 	}
 
 	embeddedFS := bundled.WrapFS(wrapper)
-
 	host := &fullHost{fs: embeddedFS}
 	ph := &parseHost{fs: embeddedFS}
+
+	fileNames := []string{fileName}
+
+	// add bundled lib types to file list
+	for path := range bundledTypes {
+		fileNames = append(fileNames, path)
+	}
+
+	// add runtime types to file list
+	filepath.WalkDir("types", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		fileNames = append(fileNames, "/"+path)
+		return nil
+	})
+
+	// add dts to file list if provided
+	if cDtsCode != nil {
+		fileNames = append(fileNames, "/types.d.ts")
+	}
 
 	json, diags := tsoptions.ParseConfigFileTextToJson("/tsconfig.json", "/tsconfig.json", tsconfigJSON)
 	if len(diags) > 0 {
@@ -168,26 +241,7 @@ func transpile(cFileName *C.char, cCode *C.char, cDtsCode *C.char, cOutDir *C.ch
 		nil,
 		nil,
 	)
-	config.ParsedConfig.FileNames = append(config.ParsedConfig.FileNames, fileName)
-
-	// add bundled lib types to file list
-	for path := range bundledTypes {
-		config.ParsedConfig.FileNames = append(config.ParsedConfig.FileNames, path)
-	}
-
-	// add runtime types to file list
-	filepath.WalkDir("types", func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		config.ParsedConfig.FileNames = append(config.ParsedConfig.FileNames, "/"+path)
-		return nil
-	})
-
-	// add dts to file list if provided
-	if cDtsCode != nil {
-		config.ParsedConfig.FileNames = append(config.ParsedConfig.FileNames, "/types.d.ts")
-	}
+	config.ParsedConfig.FileNames = append(config.ParsedConfig.FileNames, fileNames...)
 
 	prog := compiler.NewProgram(compiler.ProgramOptions{
 		Host:   host,
@@ -234,6 +288,104 @@ func transpile(cFileName *C.char, cCode *C.char, cDtsCode *C.char, cOutDir *C.ch
 	prog.Emit(ctx, compiler.EmitOptions{
 		WriteFile: func(outFileName string, text string, data *compiler.WriteFileData) error {
 			dest := filepath.Join(outDir, outFileName)
+			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+				emitErr = err
+				return err
+			}
+			if err := os.WriteFile(dest, []byte(text), 0o644); err != nil {
+				emitErr = err
+				return err
+			}
+			return nil
+		},
+	})
+
+	if emitErr != nil {
+		return C.CString("Error: " + emitErr.Error())
+	}
+	return C.CString("")
+}
+
+//export build
+func build(cSrcDir *C.char, cOutDir *C.char) *C.char {
+	srcDir := C.GoString(cSrcDir)
+	outDir := C.GoString(cOutDir)
+
+	wrapper := makeWrapper()
+	var fileNames []string
+
+	// add bundled lib types to file list
+	for path := range bundledTypes {
+		fileNames = append(fileNames, path)
+	}
+
+	// add runtime types to file list
+	filepath.WalkDir("types", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		fileNames = append(fileNames, "/"+path)
+		return nil
+	})
+
+	// walk src directory, inject all .ts files into virtual FS
+	var walkErr error
+	filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if !strings.HasSuffix(path, ".ts") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			walkErr = err
+			return err
+		}
+		vPath := "/" + path
+		wrapper.files[vPath] = string(data)
+		fileNames = append(fileNames, vPath)
+		return nil
+	})
+
+	if walkErr != nil {
+		return C.CString("Error: " + walkErr.Error())
+	}
+
+	embeddedFS := bundled.WrapFS(wrapper)
+	host := &fullHost{fs: embeddedFS}
+	ph := &parseHost{fs: embeddedFS}
+
+	config := makeConfig(ph, fileNames)
+
+	prog := compiler.NewProgram(compiler.ProgramOptions{
+		Host:   host,
+		Config: config,
+	})
+
+	if prog == nil {
+		return C.CString("Error: Failed to init program")
+	}
+
+	ctx := context.Background()
+
+	// print all diagnostics
+	for _, sf := range prog.GetSourceFiles() {
+		diags := append(
+			prog.GetSyntacticDiagnostics(ctx, sf),
+			prog.GetSemanticDiagnostics(ctx, sf)...,
+		)
+		for _, d := range diags {
+			fmt.Printf("[%s] TS%d: %s\n", d.Category().String(), d.Code(), d.String())
+		}
+	}
+
+	var emitErr error
+	prog.Emit(ctx, compiler.EmitOptions{
+		WriteFile: func(outFileName string, text string, data *compiler.WriteFileData) error {
+			// strip leading "/" and srcDir prefix from virtual path
+			rel := strings.TrimPrefix(outFileName, "/"+srcDir+"/")
+			dest := filepath.Join(outDir, rel)
 			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 				emitErr = err
 				return err
