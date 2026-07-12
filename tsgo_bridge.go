@@ -6,7 +6,9 @@ package main
 import "C"
 import (
 	"context"
+	"embed"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +24,26 @@ import (
 	"github.com/microsoft/typescript-go/internal/tspath"
 	"github.com/microsoft/typescript-go/internal/vfs"
 )
+
+//go:embed types
+var typesFS embed.FS
+
+var bundledTypes map[string]string
+
+func init() {
+	bundledTypes = make(map[string]string)
+	fs.WalkDir(typesFS, "types", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := typesFS.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		bundledTypes["/"+path] = string(data)
+		return nil
+	})
+}
 
 // --- FS and Host implementations (Keep as before) ---
 type fsWrapper struct{ files map[string]string }
@@ -89,6 +111,10 @@ const tsconfigJSON = `{
 	}
 }`
 
+const consoleDTS = `declare const console: Console;
+export default console;
+`
+
 //export transpile
 func transpile(cFileName *C.char, cCode *C.char, cDtsCode *C.char, cOutDir *C.char) *C.char {
 	fileName := "/" + C.GoString(cFileName)
@@ -96,6 +122,12 @@ func transpile(cFileName *C.char, cCode *C.char, cDtsCode *C.char, cOutDir *C.ch
 
 	wrapper := &fsWrapper{files: make(map[string]string)}
 	wrapper.files[fileName] = tsCode
+	wrapper.files["/console.d.ts"] = consoleDTS
+
+	// inject bundled types/*.d.ts into virtual FS
+	for path, content := range bundledTypes {
+		wrapper.files[path] = content
+	}
 
 	// inject dts into virtual FS if provided
 	if cDtsCode != nil {
@@ -123,6 +155,11 @@ func transpile(cFileName *C.char, cCode *C.char, cDtsCode *C.char, cOutDir *C.ch
 		nil,
 	)
 	config.ParsedConfig.FileNames = append(config.ParsedConfig.FileNames, fileName)
+
+	// add bundled types to file list
+	for path := range bundledTypes {
+		config.ParsedConfig.FileNames = append(config.ParsedConfig.FileNames, path)
+	}
 
 	// add dts to file list if provided
 	if cDtsCode != nil {

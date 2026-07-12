@@ -19,18 +19,12 @@ int main() {
         "const v4 = scale(v1, 2);\n"
         "console.log(dot(v3, v4));\n";
 
-    std::string dts_code =
-        "interface Vector3 { x: number; y: number; z: number; }\n"
-        "declare function add(a: Vector3, b: Vector3): Vector3;\n"
-        "declare function scale(a: Vector3, s: number): Vector3;\n"
-        "declare function dot(a: Vector3, b: Vector3): number;\n";
-
     //std::string my_ts_code = "import console from 'console'; console.log('Hello');";
     //GoStr result1(transpile(const_cast<char*>("test.ts"), const_cast<char*>(my_ts_code.c_str()), nullptr, nullptr));
     //std::cout << "\n" << result1.view() << std::endl;
     //GoStr result(transpile(const_cast<char*>("dir1/dir2/dir3/test.ts"), const_cast<char*>(my_ts_code.c_str()), const_cast<char*>("dist")));
-    GoStr result2(transpile(const_cast<char*>("point.ts"), const_cast<char*>(ts_code.c_str()), const_cast<char*>(dts_code.c_str()), nullptr));
-    //GoStr result2(transpile(const_cast<char*>("point.ts"), const_cast<char*>(ts_code.c_str()), nullptr, nullptr));
+    //GoStr result2(transpile(const_cast<char*>("point.ts"), const_cast<char*>(ts_code.c_str()), const_cast<char*>(dts_code.c_str()), nullptr));
+    GoStr result2(transpile(const_cast<char*>("point.ts"), const_cast<char*>(ts_code.c_str()), nullptr, nullptr));
     std::cout << "\n" << result2.view() << std::endl;
     return 0;
 }
