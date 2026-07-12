@@ -2,7 +2,7 @@
 #include <memory>
 #include <string_view>
 #include <cstdlib>
-#include "libtsgo.h"
+#include "libslim_tsgo.h"
 
 struct GoStr {
     char* p;
