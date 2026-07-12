@@ -6,6 +6,7 @@ package main
 import "C"
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,9 +74,8 @@ func (p *parseHost) ReadDirectory(root string, extensions []string, excludes []s
 
 const tsconfigJSON = `{
 	"compilerOptions": {
-		"target": "es2024",
-		"module": "es2022",
-		"types": [],
+		"target": "ESNext",
+		"module": "ESNext",
 		"allowJs": true,
 		"checkJs": true,
 		"removeComments": true,
@@ -90,12 +90,17 @@ const tsconfigJSON = `{
 }`
 
 //export transpile
-func transpile(cFileName *C.char, cCode *C.char, cOutDir *C.char) *C.char {
+func transpile(cFileName *C.char, cCode *C.char, cDtsCode *C.char, cOutDir *C.char) *C.char {
 	fileName := "/" + C.GoString(cFileName)
 	tsCode := C.GoString(cCode)
 
 	wrapper := &fsWrapper{files: make(map[string]string)}
 	wrapper.files[fileName] = tsCode
+
+	// inject dts into virtual FS if provided
+	if cDtsCode != nil {
+		wrapper.files["/types.d.ts"] = C.GoString(cDtsCode)
+	}
 
 	embeddedFS := bundled.WrapFS(wrapper)
 
@@ -119,6 +124,11 @@ func transpile(cFileName *C.char, cCode *C.char, cOutDir *C.char) *C.char {
 	)
 	config.ParsedConfig.FileNames = append(config.ParsedConfig.FileNames, fileName)
 
+	// add dts to file list if provided
+	if cDtsCode != nil {
+		config.ParsedConfig.FileNames = append(config.ParsedConfig.FileNames, "/types.d.ts")
+	}
+
 	prog := compiler.NewProgram(compiler.ProgramOptions{
 		Host:   host,
 		Config: config,
@@ -128,6 +138,18 @@ func transpile(cFileName *C.char, cCode *C.char, cOutDir *C.char) *C.char {
 		return C.CString("Error: Failed to init program")
 	}
 
+	ctx := context.Background()
+	sf := prog.GetSourceFile(fileName)
+	if sf != nil {
+		diags := append(
+			prog.GetSyntacticDiagnostics(ctx, sf),
+			prog.GetSemanticDiagnostics(ctx, sf)...,
+		)
+		for _, d := range diags {
+			fmt.Printf("[%s] TS%d: %s\n", d.Category().String(), d.Code(), d.String())
+		}
+	}
+
 	outDir := ""
 	if cOutDir != nil {
 		outDir = C.GoString(cOutDir)
@@ -135,7 +157,7 @@ func transpile(cFileName *C.char, cCode *C.char, cOutDir *C.char) *C.char {
 
 	if outDir == "" {
 		var sb strings.Builder
-		prog.Emit(context.Background(), compiler.EmitOptions{
+		prog.Emit(ctx, compiler.EmitOptions{
 			WriteFile: func(fileName string, text string, data *compiler.WriteFileData) error {
 				sb.WriteString(text)
 				return nil
@@ -149,7 +171,7 @@ func transpile(cFileName *C.char, cCode *C.char, cOutDir *C.char) *C.char {
 	}
 
 	var emitErr error
-	prog.Emit(context.Background(), compiler.EmitOptions{
+	prog.Emit(ctx, compiler.EmitOptions{
 		WriteFile: func(outFileName string, text string, data *compiler.WriteFileData) error {
 			dest := filepath.Join(outDir, outFileName)
 			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
