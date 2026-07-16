@@ -129,61 +129,10 @@ func makeWrapper() *fsWrapper {
 	return wrapper
 }
 
-func fetchGithubTypes(owner, repo, branch, path string, dtsBuilder *strings.Builder, wrapper *fsWrapper) {
-	apiURL := fmt.Sprintf("http://forgejo/api/v1/repos/%s/%s/git/trees/%s?recursive=1", owner, repo, branch)
-	resp, err := http.Get(apiURL)
-	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-	var result struct {
-		Tree []struct {
-			Path string `json:"path"`
-		} `json:"tree"`
-	}
-	json.NewDecoder(resp.Body).Decode(&result)
-	for _, item := range result.Tree {
-		if strings.HasPrefix(item.Path, path+"/") && strings.HasSuffix(item.Path, ".d.ts") {
-			rawURL := fmt.Sprintf("http://forgejo/raw/branch/%s/%s", branch, item.Path)
-			if res, err := http.Get(rawURL); err == nil {
-				data, _ := io.ReadAll(res.Body)
-				res.Body.Close()
-				dtsBuilder.Write(data)
-				dtsBuilder.WriteString("\n")
-				wrapper.files["/types/"+filepath.Base(item.Path)] = string(data)
-			}
-		}
-	}
-}
-
-//export fetch_and_transpile
-func fetch_and_transpile(cSrcURI *C.char) *C.char {
-	uri := C.GoString(cSrcURI)
-	wrapper := makeWrapper()
-	var dtsBuilder strings.Builder
-	var fileName string
-	var data []byte
-
-	if strings.HasPrefix(uri, "http://forgejo/") {
-		parts := strings.Split(strings.TrimPrefix(uri, "http://forgejo/"), "/")
-		if len(parts) >= 6 {
-			owner, repo, branch := parts[0], parts[1], parts[4]
-			dirPath := strings.Join(parts[5:len(parts)-1], "/")
-			resp, _ := http.Get(uri)
-			if resp != nil {
-				data, _ = io.ReadAll(resp.Body)
-				resp.Body.Close()
-			}
-			fetchGithubTypes(owner, repo, branch, dirPath, &dtsBuilder, wrapper)
-			fileName = "/" + parts[len(parts)-1]
-		}
-	} else {
-		filePath := strings.TrimPrefix(uri, "file://")
-		data, _ = os.ReadFile(filePath)
-		fileName = "/" + filepath.Base(filePath)
-	}
-
-	wrapper.files[fileName] = string(data)
+// transpile_core builds the virtual fs, compiles, and emits JS for fileName/source
+// plus any accumulated .d.ts content in dtsBuilder. Shared by both exported entry points.
+func transpile_core(fileName string, source string, dtsBuilder *strings.Builder, wrapper *fsWrapper) string {
+	wrapper.files[fileName] = source
 	dtsCode := dtsBuilder.String()
 	if dtsCode != "" {
 		wrapper.files["/types/types.d.ts"] = dtsCode
@@ -193,8 +142,8 @@ func fetch_and_transpile(cSrcURI *C.char) *C.char {
 	host := &fullHost{fs: embeddedFS}
 	ph := &parseHost{fs: embeddedFS}
 
-	json, _ := tsoptions.ParseConfigFileTextToJson("/tsconfig.json", "/tsconfig.json", tsconfigJSON)
-	config := tsoptions.ParseJsonConfigFileContent(json, ph, "/", nil, "/tsconfig.json", nil, nil, nil)
+	jsonCfg, _ := tsoptions.ParseConfigFileTextToJson("/tsconfig.json", "/tsconfig.json", tsconfigJSON)
+	config := tsoptions.ParseJsonConfigFileContent(jsonCfg, ph, "/", nil, "/tsconfig.json", nil, nil, nil)
 	config.ParsedConfig.FileNames = []string{fileName}
 	if dtsCode != "" {
 		config.ParsedConfig.FileNames = append(config.ParsedConfig.FileNames, "/types/types.d.ts")
@@ -202,12 +151,223 @@ func fetch_and_transpile(cSrcURI *C.char) *C.char {
 
 	prog := compiler.NewProgram(compiler.ProgramOptions{Host: host, Config: config})
 	if prog == nil {
-		return C.CString("")
+		return ""
 	}
 
 	var sb strings.Builder
-	prog.Emit(context.Background(), compiler.EmitOptions{WriteFile: func(fn, text string, d *compiler.WriteFileData) error { sb.WriteString(text); return nil }})
-	return C.CString(sb.String())
+	prog.Emit(context.Background(), compiler.EmitOptions{WriteFile: func(fn, text string, d *compiler.WriteFileData) error {
+		sb.WriteString(text)
+		return nil
+	}})
+	return sb.String()
+}
+
+// gitApiKind identifies remote tree/listing API dialect for a git-compat host.
+type gitApiKind int
+
+const (
+	gitApiNone gitApiKind = iota
+	gitApiGitea
+	gitApiGithub
+)
+
+// gitApiKindForHost maps a known git-compat host to its API dialect.
+// Extend this table to support additional forges.
+func gitApiKindForHost(host string) gitApiKind {
+	switch host {
+	case "raw.githubusercontent.com":
+		return gitApiGithub
+	case "forgejo", "codeberg.org":
+		return gitApiGitea
+	default:
+		return gitApiNone
+	}
+}
+
+// parsedGitURI holds the pieces needed to hit a tree API and construct raw URLs.
+type parsedGitURI struct {
+	kind    gitApiKind
+	host    string
+	owner   string
+	repo    string
+	branch  string
+	dirPath string // repo-relative directory containing the source file
+}
+
+// parseGitURI extracts {host, owner, repo, branch} from either uri shape:
+//
+//	gitea-style:  scheme://HOST/OWNER/REPO/raw/branch/BRANCH/PATH...
+//	github-style: scheme://raw.githubusercontent.com/OWNER/REPO/BRANCH/PATH...
+func parseGitURI(uri string) (parsedGitURI, bool) {
+	rest := uri
+	rest = strings.TrimPrefix(rest, "https://")
+	rest = strings.TrimPrefix(rest, "http://")
+
+	slash := strings.Index(rest, "/")
+	if slash < 0 {
+		return parsedGitURI{}, false
+	}
+	host := rest[:slash]
+	path := rest[slash+1:]
+	parts := strings.Split(path, "/")
+
+	kind := gitApiKindForHost(host)
+	switch kind {
+	case gitApiGithub:
+		// OWNER/REPO/BRANCH/PATH...
+		if len(parts) < 4 {
+			return parsedGitURI{}, false
+		}
+		dirPath := filepath.Dir(strings.Join(parts[3:], "/"))
+		if dirPath == "." {
+			dirPath = ""
+		}
+		return parsedGitURI{kind: kind, host: host, owner: parts[0], repo: parts[1], branch: parts[2], dirPath: dirPath}, true
+	case gitApiGitea:
+		// OWNER/REPO/raw/branch/BRANCH/PATH...
+		if len(parts) < 5 || parts[2] != "raw" || parts[3] != "branch" {
+			return parsedGitURI{}, false
+		}
+		dirPath := filepath.Dir(strings.Join(parts[5:], "/"))
+		if dirPath == "." {
+			dirPath = ""
+		}
+		return parsedGitURI{kind: kind, host: host, owner: parts[0], repo: parts[1], branch: parts[4], dirPath: dirPath}, true
+	default:
+		return parsedGitURI{}, false
+	}
+}
+
+// fetchAllDts walks the repo tree via the appropriate API and fetches every *.d.ts file
+// found in the same directory as the source file (pg.dirPath), appending contents to dtsBuilder and storing each under /types/<basename> in wrapper.
+// Best-effort: any individual failure is skipped, never fatal.
+func fetchAllDts(pg parsedGitURI, dtsBuilder *strings.Builder, wrapper *fsWrapper) {
+	var apiURL string
+	switch pg.kind {
+	case gitApiGithub:
+		apiURL = fmt.Sprintf("https://api.github.com/repos/%s/%s/git/trees/%s?recursive=1", pg.owner, pg.repo, pg.branch)
+	case gitApiGitea:
+		apiURL = fmt.Sprintf("http://%s/api/v1/repos/%s/%s/git/trees/%s?recursive=1", pg.host, pg.owner, pg.repo, pg.branch)
+	default:
+		return
+	}
+
+	resp, err := http.Get(apiURL)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Tree []struct {
+			Path string `json:"path"`
+		} `json:"tree"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return
+	}
+
+	for _, item := range result.Tree {
+		if !strings.HasSuffix(item.Path, ".d.ts") {
+			continue
+		}
+		itemDir := filepath.Dir(item.Path)
+		if itemDir == "." {
+			itemDir = ""
+		}
+		if itemDir != pg.dirPath {
+			continue
+		}
+
+		var rawURL string
+		switch pg.kind {
+		case gitApiGithub:
+			rawURL = fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", pg.owner, pg.repo, pg.branch, item.Path)
+		case gitApiGitea:
+			rawURL = fmt.Sprintf("http://%s/%s/%s/raw/branch/%s/%s", pg.host, pg.owner, pg.repo, pg.branch, item.Path)
+		}
+
+		res, err := http.Get(rawURL)
+		if err != nil {
+			continue
+		}
+		data, err := io.ReadAll(res.Body)
+		res.Body.Close()
+		if err != nil {
+			continue
+		}
+
+		dtsBuilder.Write(data)
+		dtsBuilder.WriteString("\n")
+		wrapper.files["/types/"+filepath.Base(item.Path)] = string(data)
+	}
+}
+
+// fetch_and_transpile handles file:// and plain http(s):// sources.
+// For file://, sibling *.d.ts files in the same directory are globbed and included.
+// For http(s)://, only the single source file is fetched -- no repo-wide type discovery.
+//
+//export fetch_and_transpile
+func fetch_and_transpile(cSrcURI *C.char) *C.char {
+	uri := C.GoString(cSrcURI)
+	wrapper := makeWrapper()
+	var dtsBuilder strings.Builder
+	var fileName string
+	var data []byte
+
+	if strings.HasPrefix(uri, "file://") {
+		filePath := strings.TrimPrefix(uri, "file://")
+		data, _ = os.ReadFile(filePath)
+		fileName = "/" + filepath.Base(filePath)
+
+		dir := filepath.Dir(filePath)
+		matches, _ := filepath.Glob(filepath.Join(dir, "*.d.ts"))
+		for _, m := range matches {
+			content, err := os.ReadFile(m)
+			if err != nil {
+				continue
+			}
+			dtsBuilder.Write(content)
+			dtsBuilder.WriteString("\n")
+			wrapper.files["/types/"+filepath.Base(m)] = string(content)
+		}
+	} else {
+		resp, err := http.Get(uri)
+		if err == nil {
+			data, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
+		}
+		fileName = "/" + filepath.Base(uri)
+	}
+
+	result := transpile_core(fileName, string(data), &dtsBuilder, wrapper)
+	return C.CString(result)
+}
+
+// fetch_git_and_transpile handles git-compat hosts (github raw, forgejo, codeberg.org).
+// It fetches the source file, then discovers and fetches every *.d.ts in the same
+// repo directory as the source file via the host's tree/listing API.
+//
+//export fetch_git_and_transpile
+func fetch_git_and_transpile(cSrcURI *C.char) *C.char {
+	uri := C.GoString(cSrcURI)
+	wrapper := makeWrapper()
+	var dtsBuilder strings.Builder
+	var data []byte
+
+	resp, err := http.Get(uri)
+	if err == nil {
+		data, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+	}
+	fileName := "/" + filepath.Base(uri)
+
+	if pg, ok := parseGitURI(uri); ok {
+		fetchAllDts(pg, &dtsBuilder, wrapper)
+	}
+
+	result := transpile_core(fileName, string(data), &dtsBuilder, wrapper)
+	return C.CString(result)
 }
 
 func main() {}
