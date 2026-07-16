@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
     }
 
     std::string uri2 = "http://forgejo/greergan/typescript_samples/raw/branch/master/src/hello_world.ts";
-    GoStr result2 = fetch_git_and_transpile(const_cast<char*>(uri2.c_str()));
+    GoStr result2 = fetch_and_transpile(const_cast<char*>(uri2.c_str()));
 
     if(result2.view() != expected) {
         std::println("Test 2 Failed");
@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
     }
 
     std::string uri3 = "https://raw.githubusercontent.com/greergan/typescript_samples/master/src/hello_world.ts";
-    GoStr result3 = fetch_git_and_transpile(const_cast<char*>(uri3.c_str()));
+    GoStr result3 = fetch_and_transpile(const_cast<char*>(uri3.c_str()));
 
     if(result3.view() != expected) {
         std::println("Test 3 Failed");
@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
     }
 
     std::string uri4 = "http://codeberg.org/greergan/typescript_samples/raw/branch/master/src/hello_world.ts";
-    GoStr result4 = fetch_git_and_transpile(const_cast<char*>(uri4.c_str()));
+    GoStr result4 = fetch_and_transpile(const_cast<char*>(uri4.c_str()));
 
     if(result4.view() != expected) {
         std::println("Test 4 Failed");
