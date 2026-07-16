@@ -31,7 +31,7 @@ int main() {
     //GoStr result2(transpile(const_cast<char*>("point.ts"), const_cast<char*>(ts_code.c_str()), const_cast<char*>(dts_code.c_str()), nullptr));
     //GoStr result2(transpile(const_cast<char*>("point.ts"), const_cast<char*>(ts_code.c_str()), nullptr, nullptr));
     //std::cout << "\n" << result2.view() << std::endl;
-    build(const_cast<char*>("src"), const_cast<char*>("dist"));
+    //build(const_cast<char*>("src"), const_cast<char*>("dist"));
 
     return 0;
 }

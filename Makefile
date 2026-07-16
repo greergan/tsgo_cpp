@@ -1,41 +1,35 @@
 TSGO_REPO := ../typescript-go
 TSGO_BRANCH := typescript/v7.0.2
 TSGO_VERSION := $(notdir $(TSGO_BRANCH))
-DEB_NAME := libslim-tsgo
-DEB_VERSION := $(subst v,,$(TSGO_VERSION))
-DEB_ARCH := amd64
-DEB_DIR := dist/$(DEB_NAME)_$(DEB_VERSION)_$(DEB_ARCH)
 
-all: test
+.PHONY: all fetch-tsgo build clean
 
-$(TSGO_REPO):
-	git clone --branch $(TSGO_BRANCH) --depth 1 https://github.com/microsoft/typescript-go.git $(TSGO_REPO)
+all: build
 
-libtsgo.a: $(TSGO_REPO)
-	cp tsgo_bridge.go $(TSGO_REPO)/
-#	cp -r ../typescript-bridge/types types
-#	cp -r lib $(TSGO_REPO)/lib
+fetch-tsgo:
+	@echo "==> Fetching typescript-go..."
+	@if [ -d $(TSGO_REPO) ]; then \
+		git -C $(TSGO_REPO) fetch --depth 1 origin $(TSGO_BRANCH) && \
+		git -C $(TSGO_REPO) checkout FETCH_HEAD; \
+	else \
+		git clone --branch $(TSGO_BRANCH) --depth 1 https://github.com/microsoft/typescript-go.git $(TSGO_REPO); \
+		git -C $(TSGO_REPO) fetch --tags; \
+	fi
+
+build: fetch-tsgo
+	@echo "==> Building libtsgo..."
+	cp tsgo_cpp.go $(TSGO_REPO)/
 	cp -r lib $(TSGO_REPO)/lib
 	go mod tidy
-	cd $(TSGO_REPO) && go build -buildmode=c-archive -o libslim_tsgo.a tsgo_bridge.go
-	cp $(TSGO_REPO)/libslim_tsgo.a .
-	cp $(TSGO_REPO)/libslim_tsgo.h .
+	cd $(TSGO_REPO) && go build -buildmode=c-archive -o libtsgo_cpp.a tsgo_cpp.go
+	cp $(TSGO_REPO)/libtsgo_cpp.a .
+	cp $(TSGO_REPO)/libtsgo_cpp.h .
 
-test: clean libtsgo.a
-	g++ -o test test.cpp libslim_tsgo.a -lpthread -ldl
+test: build
+	g++ -o test test.cpp libtsgo_cpp.a -lpthread -ldl
 	./test
 
-deb: libtsgo.a
-	mkdir -p $(DEB_DIR)/DEBIAN
-	mkdir -p $(DEB_DIR)/usr/lib
-	mkdir -p $(DEB_DIR)/usr/include
-	cp libslim_tsgo.a $(DEB_DIR)/usr/lib/
-	cp libslim_tsgo.h $(DEB_DIR)/usr/include/
-	printf 'Package: $(DEB_NAME)\nVersion: $(DEB_VERSION)\nSection: libs\nPriority: optional\nArchitecture: $(DEB_ARCH)\nMaintainer: you\nDescription: TypeScript-Go C archive and header\n' > $(DEB_DIR)/DEBIAN/control
-	dpkg-deb --build $(DEB_DIR)
-
 clean:
-	rm -rf libslim_tsgo.a libslim_tsgo.h test dist
-	rm -f $(TSGO_REPO)/tsgo_bridge.go $(TSGO_REPO)/libslim_tsgo.h $(TSGO_REPO)/libslim_tsgo.a
+	rm -rf libtsgo_cpp.a libtsgo_cpp.h test dist
+	rm -f $(TSGO_REPO)/tsgo_cpp.go $(TSGO_REPO)/libtsgo_cpp.h $(TSGO_REPO)/libtsgo_cpp.a
 	rm -rf $(TSGO_REPO)/lib
-	clear
