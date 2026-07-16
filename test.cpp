@@ -2,14 +2,8 @@
 #include <memory>
 #include <string_view>
 #include <cstdlib>
-#include "libslim_tsgo.h"
-
-struct GoStr {
-    char* p;
-    GoStr(char* p) : p(p) {}
-    ~GoStr() { free(p); }
-    std::string_view view() const { return p; }
-};
+#include "gostr.h"
+#include "libtsgo_cpp.h"
 
 int main() {
     std::string ts_code =
@@ -24,9 +18,9 @@ int main() {
         "const v8 = scale(v5, 2);\n"
         "console.log(dot(v7, v8));\n";
 
-    //std::string my_ts_code = "import console from 'console'; console.log('Hello');";
-    //GoStr result1(transpile(const_cast<char*>("test.ts"), const_cast<char*>(my_ts_code.c_str()), nullptr, nullptr));
-    //std::cout << "\n" << result1.view() << std::endl;
+    std::string my_ts_code = "import console from 'console'; console.log('Hello');";
+    GoStr result1 = transpile(const_cast<char*>("test.ts"), const_cast<char*>(my_ts_code.c_str()), nullptr, nullptr);
+    std::cout << "\n" << result1.view() << std::endl;
     //GoStr result(transpile(const_cast<char*>("dir1/dir2/dir3/test.ts"), const_cast<char*>(my_ts_code.c_str()), const_cast<char*>("dist")));
     //GoStr result2(transpile(const_cast<char*>("point.ts"), const_cast<char*>(ts_code.c_str()), const_cast<char*>(dts_code.c_str()), nullptr));
     //GoStr result2(transpile(const_cast<char*>("point.ts"), const_cast<char*>(ts_code.c_str()), nullptr, nullptr));

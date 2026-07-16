@@ -2,5 +2,6 @@ control
 dist
 *.h
 *.a
-test
+test_c
+test_cpp
 go.sum

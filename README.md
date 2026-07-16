@@ -1,10 +1,6 @@
-<a href="https://codeberg.org/greergan/SlimTS">
-  <img src="https://raw.githubusercontent.com/greergan/SlimTS/master/assets/slimts_logo.png" width="75" alt="SlimTS Logo">
-</a>
+# libtsgo-c++
 
-# libslim-tsgo
-
-A C-callable static library that wraps the [microsoft/typescript-go](https://github.com/microsoft/typescript-go) compiler, enabling TypeScript support for [SlimTS](https://codeberg.org/greergan/SlimTS)
+A C-callable static library that wraps the [microsoft/typescript-go](https://github.com/microsoft/typescript-go) compiler, enabling high-performance TypeScript compilation from C or C++.
 
 ## Table of Contents
 
@@ -14,19 +10,18 @@ A C-callable static library that wraps the [microsoft/typescript-go](https://git
   - [GoStr RAII helper](#gostr-raii-helper)
   - [transpile](#transpile)
   - [build](#build)
+- [Requirements](#requirements)
+- [Build](#build-1)
 - [Examples](#examples)
   - [transpile](#transpile-1)
-  - [build](#build-1)
-- [Requirements](#requirements)
-- [Build](#build-2)
-- [Install](#install)
+  - [build](#build-2)
 
 ## Typescript Definition Files
 
 | Directory | Purpose | When |
 |---|---|---|
 | `typescript-go` | All `microsoft/typescript-go` compiler libraries | Embedded at compile time into the static archive |
-| `lib/` | Slim TypeScript standard library `.d.ts` files | Embedded at compile time into the static archive |
+| `lib/` | TypeScript standard library `.d.ts` files | Embedded at compile time into the static archive |
 | `types/` | User-provided type definitions | Loaded at runtime from the working directory |
 
 [↑ Top](#table-of-contents)
@@ -57,13 +52,10 @@ The following `compilerOptions` are embedded at compile time:
 
 ### GoStr RAII helper
 
+A lightweight RAII wrapper for strings returned by the library. Include `gostr.h` to use it.
+
 ```cpp
-struct GoStr {
-    char* p;
-    GoStr(char* p) : p(p) {}
-    ~GoStr() { free(p); }
-    std::string_view view() const { return p; }
-};
+#include <gostr.h>
 ```
 
 ### `transpile`
@@ -95,6 +87,29 @@ void build(
 
 [↑ Top](#table-of-contents)
 
+## Requirements
+
+- Go 1.26+
+- g++
+- git
+- make
+
+[↑ Top](#table-of-contents)
+
+## Build
+
+```bash
+git clone https://github.com/greergan/tsgo_cpp.git
+cd tsgo_cpp
+make
+```
+
+This will:
+- Clone `microsoft/typescript-go` at branch `typescript/v7.0.2`
+- Build `libtsgo_cpp.a` and `libtsgo_cpp.h`
+
+[↑ Top](#table-of-contents)
+
 ## Examples
 
 ### transpile
@@ -102,16 +117,17 @@ void build(
 #### In-memory result
 
 ```cpp
-#include <libslim_tsgo.h>
+#include <libtsgo_cpp.h>
+#include <gostr.h>
 
 std::string ts = "const x: number = 42;\nconsole.log(x);\n";
 
-GoStr result(transpile(
+GoStr result = transpile(
     const_cast<char*>("input.ts"),
     const_cast<char*>(ts.c_str()),
     nullptr,
     nullptr
-));
+);
 
 std::cout << result.view() << std::endl;
 ```
@@ -119,7 +135,7 @@ std::cout << result.view() << std::endl;
 #### Emit to disk
 
 ```cpp
-#include <libslim_tsgo.h>
+#include <libtsgo_cpp.h>
 
 std::string ts = "const x: number = 42;\nconsole.log(x);\n";
 
@@ -134,17 +150,18 @@ transpile(
 #### With .d.ts declarations
 
 ```cpp
-#include <libslim_tsgo.h>
+#include <libtsgo_cpp.h>
+#include <gostr.h>
 
 std::string dts = "declare function add(a: number, b: number): number;\n";
 std::string ts  = "const result = add(1, 2);\nconsole.log(result);\n";
 
-GoStr result(transpile(
+GoStr result = transpile(
     const_cast<char*>("input.ts"),
     const_cast<char*>(ts.c_str()),
     const_cast<char*>(dts.c_str()),
     nullptr
-));
+);
 
 std::cout << result.view() << std::endl;
 ```
@@ -152,49 +169,12 @@ std::cout << result.view() << std::endl;
 ### build
 
 ```cpp
-#include <libslim_tsgo.h>
+#include <libtsgo_cpp.h>
 
 build(
     const_cast<char*>("src"),
     const_cast<char*>("dist")
 );
 ```
-
-[↑ Top](#table-of-contents)
-
-## Requirements
-
-- Go 1.26+
-- g++
-- dpkg-deb
-- git
-- make
-
-[↑ Top](#table-of-contents)
-
-## Build
-
-```bash
-git clone https://codeberg.org/greergan/slim-typescript-go-lib.git
-cd slim-typescript-go-lib
-make deb
-```
-
-This will:
-- Clone `microsoft/typescript-go` at branch `typescript/v7.0.2`
-- Build `libslim_tsgo.a` and `libslim_tsgo.h`
-- Package them into `dist/libslim-tsgo_7.0.2_amd64.deb`
-
-[↑ Top](#table-of-contents)
-
-## Install
-
-```bash
-sudo dpkg -i dist/libslim-tsgo_7.0.2_amd64.deb
-```
-
-Installs:
-- `/usr/lib/libslim_tsgo.a`
-- `/usr/include/libslim_tsgo.h`
 
 [↑ Top](#table-of-contents)
