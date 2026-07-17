@@ -121,7 +121,7 @@ void build(char* srcDir, char* outDir);
 ```bash
 git clone https://github.com/greergan/libtsgo.git
 cd libtsgo
-make
+make && make test
 ```
 
 This will:
