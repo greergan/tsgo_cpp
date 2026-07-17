@@ -20,13 +20,13 @@ build: fetch-tsgo
 	cp -r lib $(TSGO_REPO)/lib
 	go mod tidy
 	@if [ -f libtsgo.a ] && [ -f libtsgo.h ] && \
-		diff -q tsgo.go $(TSGO_REPO)/tsgo.go > /dev/null 2>&1 && \
+		diff -q libtsgo.go $(TSGO_REPO)/libtsgo.go > /dev/null 2>&1 && \
 		diff -q $(TSGO_REPO)/libtsgo.a libtsgo.a > /dev/null 2>&1 && \
 		diff -q $(TSGO_REPO)/libtsgo.h libtsgo.h > /dev/null 2>&1; then \
 		echo "==> libtsgo.a and .h up to date, skipping Go build."; \
 	else \
-		cp tsgo.go $(TSGO_REPO)/ && \
-		cd $(TSGO_REPO) && go build -buildmode=c-archive -o libtsgo.a tsgo.go && \
+		cp libtsgo.go $(TSGO_REPO)/ && \
+		cd $(TSGO_REPO) && go build -buildmode=c-archive -o libtsgo.a libtsgo.go && \
 		cp libtsgo.a $(CURDIR)/ && \
 		cp libtsgo.h $(CURDIR)/; \
 	fi

@@ -1,4 +1,4 @@
-module tsgo_bridge.go
+module libtsgo.go
 
 go 1.26
 
