@@ -17,7 +17,7 @@ fetch-tsgo:
 
 build: fetch-tsgo
 	@echo "==> Building libtsgo..."
-	cp -r lib $(TSGO_REPO)/lib
+	@rm -rf $(TSGO_REPO)/lib && cp -r lib $(TSGO_REPO)/lib
 	go mod tidy
 	@if [ -f libtsgo.a ] && [ -f libtsgo.h ] && \
 		diff -q libtsgo.go $(TSGO_REPO)/libtsgo.go > /dev/null 2>&1 && \
