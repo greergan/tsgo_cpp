@@ -330,6 +330,94 @@ func rawFileURL(pg parsedGitURI, repoPath string) string {
 	}
 }
 
+// siblingURI replaces the last path segment of base with name.
+// Works uniformly for file://, http://, and https:// URIs.
+func siblingURI(base, name string) string {
+	idx := strings.LastIndex(base, "/")
+	if idx < 0 {
+		return name
+	}
+	return base[:idx+1] + name
+}
+
+// resolveReferencedDts parses content for /// <reference path="..." /> directives,
+// fetches each referenced .d.ts sibling using the same URI scheme as dtsURI,
+// caches it, and recurses. Cycle-safe via cache check.
+// Returns false if any referenced file cannot be fetched.
+func resolveReferencedDts(dtsURI string, content []byte) bool {
+	for _, line := range strings.Split(string(content), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "//") {
+			break
+		}
+		if !strings.HasPrefix(line, "///") {
+			continue
+		}
+		start := strings.Index(line, `path="`)
+		if start < 0 {
+			continue
+		}
+		start += len(`path="`)
+		end := strings.Index(line[start:], `"`)
+		if end < 0 {
+			continue
+		}
+		refName := line[start : start+end]
+		if refName == "" || !strings.HasSuffix(refName, ".d.ts") {
+			continue
+		}
+
+		basename := filepath.Base(refName)
+
+		// cycle/duplicate guard
+		dtsCacheMu.RLock()
+		_, already := dtsCache["/types/"+basename]
+		dtsCacheMu.RUnlock()
+		if already {
+			continue
+		}
+
+		refURI := siblingURI(dtsURI, refName)
+
+		var data []byte
+		if strings.HasPrefix(refURI, "file://") {
+			filePath := strings.TrimPrefix(refURI, "file://")
+			var err error
+			data, err = os.ReadFile(filePath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Reference Error: cannot read %s: %s\n", refURI, err.Error())
+				return false
+			}
+		} else {
+			res, err := http.Get(refURI)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Reference Error: cannot fetch %s: %s\n", refURI, err.Error())
+				return false
+			}
+			if res.StatusCode != http.StatusOK {
+				res.Body.Close()
+				fmt.Fprintf(os.Stderr, "Reference Error: %s returned %d\n", refURI, res.StatusCode)
+				return false
+			}
+			data, err = io.ReadAll(res.Body)
+			res.Body.Close()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Reference Error: cannot read body %s: %s\n", refURI, err.Error())
+				return false
+			}
+		}
+
+		cacheDts(basename, data)
+		if !resolveReferencedDts(refURI, data) {
+			return false
+		}
+	}
+	return true
+}
+
 func fetchGitDts(uri string) {
 	pg, ok := parseGitURI(uri)
 	if !ok {
@@ -369,7 +457,9 @@ func fetchGitDts(uri string) {
 			continue
 		}
 
-		cacheDts(filepath.Base(item.Path), data)
+		basename := filepath.Base(item.Path)
+		cacheDts(basename, data)
+		resolveReferencedDts(rawFileURL(pg, item.Path), data)
 	}
 }
 
@@ -391,7 +481,14 @@ func fetch_and_transpile(cSrcURI *C.char) *C.char {
 
 		dtsPath := strings.TrimSuffix(filePath, ".ts") + ".d.ts"
 		if content, err := os.ReadFile(dtsPath); err == nil {
-			cacheDts(filepath.Base(dtsPath), content)
+			basename := filepath.Base(dtsPath)
+			cacheDts(basename, content)
+			if !resolveReferencedDts("file://"+dtsPath, content) {
+				return C.CString("")
+			}
+		}
+		if !resolveReferencedDts(uri, data) {
+			return C.CString("")
 		}
 	} else {
 		resp, err := http.Get(uri)
@@ -413,6 +510,10 @@ func fetch_and_transpile(cSrcURI *C.char) *C.char {
 				if res.StatusCode == http.StatusOK {
 					if content, err := io.ReadAll(res.Body); err == nil {
 						cacheDts(filepath.Base(dtsURL), content)
+						if !resolveReferencedDts(dtsURL, content) {
+							res.Body.Close()
+							return C.CString("")
+						}
 					}
 				}
 				res.Body.Close()
@@ -420,6 +521,11 @@ func fetch_and_transpile(cSrcURI *C.char) *C.char {
 		}
 
 		fetchGitDts(uri)
+	}
+
+	// resolve any /// <reference path="..." /> in the source itself
+	if !resolveReferencedDts(uri, data) {
+		return C.CString("")
 	}
 
 	wrapper := makeWrapper()
