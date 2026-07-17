@@ -14,8 +14,8 @@ A C and C++ callable static library that wraps the [microsoft/typescript-go](htt
 - [Build](#build-1)
 - [Examples](#examples)
   - [fetch\_and\_transpile](#fetch_and_transpile-1)
-  - [Type Resolution](#type-resolution-1)
   - [build](#build-2)
+  - [Type Resolution](#type-resolution-1)
 
 ## Compiler Options
 
