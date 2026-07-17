@@ -110,7 +110,7 @@ void build(char* srcDir, char* outDir);
 
 - Go 1.26+
 - gcc
-- g++
+- g++ (-std=c++23)
 - git
 - make
 

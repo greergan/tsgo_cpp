@@ -7,7 +7,6 @@ import "C"
 import (
 	"context"
 	"embed"
-	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -176,13 +175,11 @@ func makeWrapper() *fsWrapper {
 	for path, content := range bundledTypes {
 		wrapper.files[path] = content
 	}
-	// inject cache
 	dtsCacheMu.RLock()
 	for path, content := range dtsCache {
 		wrapper.files[path] = content
 	}
 	dtsCacheMu.RUnlock()
-	// inject runtime types/ directory into virtual FS
 	filepath.WalkDir("types", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
@@ -213,7 +210,6 @@ func transpile_core(fileName string, source string, wrapper *fsWrapper) string {
 		dtsFileNames = append(dtsFileNames, path)
 	}
 	dtsCacheMu.RUnlock()
-
 	embeddedFS := bundled.WrapFS(wrapper)
 	host := &fullHost{fs: embeddedFS}
 	ph := &parseHost{fs: embeddedFS}
@@ -224,7 +220,7 @@ func transpile_core(fileName string, source string, wrapper *fsWrapper) string {
 
 	prog := compiler.NewProgram(compiler.ProgramOptions{Host: host, Config: config})
 	if prog == nil {
-		fmt.Fprintln(os.Stderr, "Error: Failed to init program")
+		fmt.Fprintln(os.Stderr, "transpile_core: failed to create program")
 		return ""
 	}
 
@@ -244,94 +240,6 @@ func transpile_core(fileName string, source string, wrapper *fsWrapper) string {
 	return sb.String()
 }
 
-type gitApiKind int
-
-const (
-	gitApiNone gitApiKind = iota
-	gitApiGitea
-	gitApiGithub
-)
-
-func gitApiKindForHost(host string) gitApiKind {
-	switch host {
-	case "raw.githubusercontent.com":
-		return gitApiGithub
-	case "forgejo", "codeberg.org":
-		return gitApiGitea
-	default:
-		return gitApiNone
-	}
-}
-
-type parsedGitURI struct {
-	kind    gitApiKind
-	host    string
-	owner   string
-	repo    string
-	branch  string
-	dirPath string
-}
-
-func dirPathOf(parts []string) string {
-	dir := filepath.Dir(strings.Join(parts, "/"))
-	if dir == "." {
-		return ""
-	}
-	return dir
-}
-
-func parseGitURI(uri string) (parsedGitURI, bool) {
-	rest := uri
-	rest = strings.TrimPrefix(rest, "https://")
-	rest = strings.TrimPrefix(rest, "http://")
-
-	slash := strings.Index(rest, "/")
-	if slash < 0 {
-		return parsedGitURI{}, false
-	}
-	host := rest[:slash]
-	parts := strings.Split(rest[slash+1:], "/")
-
-	switch gitApiKindForHost(host) {
-	case gitApiGithub:
-		if len(parts) < 4 {
-			return parsedGitURI{}, false
-		}
-		return parsedGitURI{kind: gitApiGithub, host: host, owner: parts[0], repo: parts[1], branch: parts[2], dirPath: dirPathOf(parts[3:])}, true
-	case gitApiGitea:
-		if len(parts) < 5 || parts[2] != "raw" || parts[3] != "branch" {
-			return parsedGitURI{}, false
-		}
-		return parsedGitURI{kind: gitApiGitea, host: host, owner: parts[0], repo: parts[1], branch: parts[4], dirPath: dirPathOf(parts[5:])}, true
-	default:
-		return parsedGitURI{}, false
-	}
-}
-
-func treeApiURL(pg parsedGitURI) string {
-	switch pg.kind {
-	case gitApiGithub:
-		return fmt.Sprintf("https://api.github.com/repos/%s/%s/git/trees/%s?recursive=1", pg.owner, pg.repo, pg.branch)
-	case gitApiGitea:
-		return fmt.Sprintf("http://%s/api/v1/repos/%s/%s/git/trees/%s?recursive=1", pg.host, pg.owner, pg.repo, pg.branch)
-	default:
-		return ""
-	}
-}
-
-func rawFileURL(pg parsedGitURI, repoPath string) string {
-	switch pg.kind {
-	case gitApiGithub:
-		return fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", pg.owner, pg.repo, pg.branch, repoPath)
-	case gitApiGitea:
-		return fmt.Sprintf("http://%s/%s/%s/raw/branch/%s/%s", pg.host, pg.owner, pg.repo, pg.branch, repoPath)
-	default:
-		return ""
-	}
-}
-
-// siblingURI replaces the last path segment of base with name.
-// Works uniformly for file://, http://, and https:// URIs.
 func siblingURI(base, name string) string {
 	idx := strings.LastIndex(base, "/")
 	if idx < 0 {
@@ -340,10 +248,6 @@ func siblingURI(base, name string) string {
 	return base[:idx+1] + name
 }
 
-// resolveReferencedDts parses content for /// <reference path="..." /> directives,
-// fetches each referenced .d.ts sibling using the same URI scheme as dtsURI,
-// caches it, and recurses. Cycle-safe via cache check.
-// Returns false if any referenced file cannot be fetched.
 func resolveReferencedDts(dtsURI string, content []byte) bool {
 	for _, line := range strings.Split(string(content), "\n") {
 		line = strings.TrimSpace(line)
@@ -372,7 +276,6 @@ func resolveReferencedDts(dtsURI string, content []byte) bool {
 
 		basename := filepath.Base(refName)
 
-		// cycle/duplicate guard
 		dtsCacheMu.RLock()
 		_, already := dtsCache["/types/"+basename]
 		dtsCacheMu.RUnlock()
@@ -388,26 +291,29 @@ func resolveReferencedDts(dtsURI string, content []byte) bool {
 			var err error
 			data, err = os.ReadFile(filePath)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Reference Error: cannot read %s: %s\n", refURI, err.Error())
+				fmt.Fprintf(os.Stderr, "resolveReferencedDts: cannot read %s: %s\n", refURI, err.Error())
 				return false
 			}
-		} else {
+		} else if strings.HasPrefix(refURI, "http://") || strings.HasPrefix(refURI, "https://") {
 			res, err := http.Get(refURI)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Reference Error: cannot fetch %s: %s\n", refURI, err.Error())
+				fmt.Fprintf(os.Stderr, "resolveReferencedDts: cannot fetch %s: %s\n", refURI, err.Error())
 				return false
 			}
 			if res.StatusCode != http.StatusOK {
 				res.Body.Close()
-				fmt.Fprintf(os.Stderr, "Reference Error: %s returned %d\n", refURI, res.StatusCode)
+				fmt.Fprintf(os.Stderr, "resolveReferencedDts: %s returned %d\n", refURI, res.StatusCode)
 				return false
 			}
 			data, err = io.ReadAll(res.Body)
 			res.Body.Close()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Reference Error: cannot read body %s: %s\n", refURI, err.Error())
+				fmt.Fprintf(os.Stderr, "resolveReferencedDts: cannot read body of %s: %s\n", refURI, err.Error())
 				return false
 			}
+		} else {
+			fmt.Fprintf(os.Stderr, "resolveReferencedDts: unsupported scheme in %s\n", refURI)
+			return false
 		}
 
 		cacheDts(basename, data)
@@ -416,51 +322,6 @@ func resolveReferencedDts(dtsURI string, content []byte) bool {
 		}
 	}
 	return true
-}
-
-func fetchGitDts(uri string) {
-	pg, ok := parseGitURI(uri)
-	if !ok {
-		return
-	}
-
-	resp, err := http.Get(treeApiURL(pg))
-	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return
-	}
-
-	var result struct {
-		Tree []struct {
-			Path string `json:"path"`
-		} `json:"tree"`
-	}
-	if json.NewDecoder(resp.Body).Decode(&result) != nil {
-		return
-	}
-
-	for _, item := range result.Tree {
-		if !strings.HasSuffix(item.Path, ".d.ts") || dirPathOf(strings.Split(item.Path, "/")) != pg.dirPath {
-			continue
-		}
-
-		res, err := http.Get(rawFileURL(pg, item.Path))
-		if err != nil {
-			continue
-		}
-		data, err := io.ReadAll(res.Body)
-		res.Body.Close()
-		if err != nil {
-			continue
-		}
-
-		basename := filepath.Base(item.Path)
-		cacheDts(basename, data)
-		resolveReferencedDts(rawFileURL(pg, item.Path), data)
-	}
 }
 
 //export fetch_and_transpile
@@ -474,32 +335,32 @@ func fetch_and_transpile(cSrcURI *C.char) *C.char {
 		var err error
 		data, err = os.ReadFile(filePath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "File Error: %s\n", err.Error())
+			fmt.Fprintf(os.Stderr, "fetch_and_transpile: cannot read file %s: %s\n", filePath, err.Error())
 			return C.CString("")
 		}
 		fileName = "/" + filepath.Base(filePath)
 
-		dtsPath := strings.TrimSuffix(filePath, ".ts") + ".d.ts"
-		if content, err := os.ReadFile(dtsPath); err == nil {
-			basename := filepath.Base(dtsPath)
-			cacheDts(basename, content)
-			if !resolveReferencedDts("file://"+dtsPath, content) {
-				return C.CString("")
+		if strings.HasSuffix(uri, ".ts") {
+			dtsPath := strings.TrimSuffix(filePath, ".ts") + ".d.ts"
+			if content, err := os.ReadFile(dtsPath); err == nil {
+				cacheDts(filepath.Base(dtsPath), content)
+				if !resolveReferencedDts("file://"+dtsPath, content) {
+					return C.CString("")
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "fetch_and_transpile: no .d.ts found for %s (checked %s)\n", filePath, dtsPath)
 			}
 		}
-		if !resolveReferencedDts(uri, data) {
-			return C.CString("")
-		}
-	} else {
+	} else if strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://") {
 		resp, err := http.Get(uri)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "HTTP Error: %s\n", err.Error())
+			fmt.Fprintf(os.Stderr, "fetch_and_transpile: HTTP GET failed for %s: %s\n", uri, err.Error())
 			return C.CString("")
 		}
 		data, err = io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Read Error: %s\n", err.Error())
+			fmt.Fprintf(os.Stderr, "fetch_and_transpile: cannot read HTTP body for %s: %s\n", uri, err.Error())
 			return C.CString("")
 		}
 		fileName = "/" + filepath.Base(uri)
@@ -515,13 +376,17 @@ func fetch_and_transpile(cSrcURI *C.char) *C.char {
 							return C.CString("")
 						}
 					}
+				} else {
+					fmt.Fprintf(os.Stderr, "fetch_and_transpile: no .d.ts found for %s (checked %s)\n", uri, dtsURL)
 				}
 				res.Body.Close()
 			}
 		}
+	} else {
+		fmt.Fprintf(os.Stderr, "fetch_and_transpile: unsupported URI scheme in %s\n", uri)
+		return C.CString("")
 	}
 
-	// resolve any /// <reference path="..." /> in the source itself
 	if !resolveReferencedDts(uri, data) {
 		return C.CString("")
 	}
@@ -548,7 +413,7 @@ func build(cSrcDir *C.char, cOutDir *C.char) {
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", err.Error())
+			fmt.Fprintf(os.Stderr, "build: cannot read source file %s: %s\n", path, err.Error())
 			return err
 		}
 		vPath := "/" + path
@@ -565,7 +430,7 @@ func build(cSrcDir *C.char, cOutDir *C.char) {
 
 	prog := compiler.NewProgram(compiler.ProgramOptions{Host: host, Config: config})
 	if prog == nil {
-		fmt.Fprintln(os.Stderr, "Error: Failed to init program")
+		fmt.Fprintln(os.Stderr, "build: failed to create program")
 		return
 	}
 
@@ -583,11 +448,11 @@ func build(cSrcDir *C.char, cOutDir *C.char) {
 			rel := strings.TrimPrefix(outFileName, "/"+srcDir+"/")
 			dest := filepath.Join(outDir, rel)
 			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %s\n", err.Error())
+				fmt.Fprintf(os.Stderr, "build: cannot create output directory %s: %s\n", filepath.Dir(dest), err.Error())
 				return err
 			}
 			if err := os.WriteFile(dest, []byte(text), 0o644); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %s\n", err.Error())
+				fmt.Fprintf(os.Stderr, "build: cannot write output file %s: %s\n", dest, err.Error())
 				return err
 			}
 			return nil
