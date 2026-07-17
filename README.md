@@ -52,7 +52,7 @@ A lightweight wrapper for strings returned by the library. Include `tsgo.h` to u
 In C++, `GoStr` is an RAII struct — the destructor calls `free()` automatically.
 
 ```cpp
-GoStr result(fetch_and_transpile(...));
+GoStr result = fetch_and_transpile(...);
 std::cout << result.view() << std::endl;
 // freed on scope exit
 ```
@@ -119,8 +119,8 @@ void build(char* srcDir, char* outDir);
 ## Build
 
 ```bash
-git clone https://github.com/greergan/tsgo_cpp.git
-cd tsgo_cpp
+git clone https://github.com/greergan/libtsgo.git
+cd libtsgo
 make
 ```
 
@@ -134,10 +134,11 @@ This will:
 
 ### fetch\_and\_transpile
 
-#### C — local file
+#### C
 
 ```c
 #include "tsgo.h"
+#include "libtsgo.h"
 
 GoStr result;
 result.p = fetch_and_transpile((char*)"file:///path/to/input.ts");
@@ -145,32 +146,13 @@ printf("%s\n", result.p ? result.p : "");
 GoStr_free(result);
 ```
 
-#### C++ — local file
+#### C++
 
 ```cpp
 #include "tsgo.h"
+#include "libtsgo.h"
 
-GoStr result(fetch_and_transpile((char*)"file:///path/to/input.ts"));
-std::cout << result.view() << std::endl;
-```
-
-#### C — http(s):// URL
-
-```c
-#include "tsgo.h"
-
-GoStr result;
-result.p = fetch_and_transpile((char*)"https://example.com/input.ts");
-printf("%s\n", result.p ? result.p : "");
-GoStr_free(result);
-```
-
-#### C++ — http(s):// URL
-
-```cpp
-#include "tsgo.h"
-
-GoStr result(fetch_and_transpile((char*)"https://example.com/input.ts"));
+GoStr result = fetch_and_transpile(const_cast<char*>("https:///path/to/input.ts"));
 std::cout << result.view() << std::endl;
 ```
 
@@ -179,7 +161,7 @@ std::cout << result.view() << std::endl;
 #### C
 
 ```c
-#include "tsgo.h"
+#include "libtsgo.h"
 
 build((char*)"src", (char*)"dist");
 ```
@@ -187,12 +169,9 @@ build((char*)"src", (char*)"dist");
 #### C++
 
 ```cpp
-#include "tsgo.h"
+#include "libtsgo.h"
 
-build(
-    const_cast<char*>("src"),
-    const_cast<char*>("dist")
-);
+build(const_cast<char*>("src"), const_cast<char*>("dist"));
 ```
 
 ### Type Resolution
