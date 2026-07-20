@@ -5,8 +5,13 @@
 #include <cstdlib>
 
 struct GoStr {
-    char* p;
+    char* p = nullptr;
+    GoStr() = default;
     GoStr(char* ptr) : p(ptr) {}
+    GoStr(const GoStr&) = delete;
+    GoStr& operator=(const GoStr&) = delete;
+    GoStr(GoStr&& other) noexcept : p(other.p) { other.p = nullptr; }
+    GoStr& operator=(GoStr&& other) noexcept { if(this != &other) { free(p); p = other.p; other.p = nullptr; } return *this; }
     ~GoStr() { free(p); }
     std::string_view view() const { return p ? p : ""; }
 };
