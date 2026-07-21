@@ -5,3 +5,4 @@ libtsgo.h
 test_c
 test_cpp
 go.sum
+.lib_dir_stamp
